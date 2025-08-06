@@ -4,7 +4,7 @@ class PDController:
     def __init__(self, kp, kd):
         self.kp = kp
         self.kd = kd
-        self.prev_error = 0
+        self.prev_error = 0.2
 
     def compute(self, setpoint, measured_value, dt):
         error = setpoint - measured_value
