@@ -1,57 +1,59 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32
-import time
+from std_msgs.msg import Int32MultiArray
 import serial
+import time
 
-class PDController:
-    def __init__(self, kp, kd):
-        self.kp = kp
-        self.kd = kd
-        self.prev_error = 0
-
-    def compute(self, setpoint, measured, dt):
-        error = setpoint - measured
-        derivative = (error - self.prev_error) / dt if dt > 0 else 0
-        output = self.kp * error + self.kd * derivative
-        self.prev_error = error
-        return output
-
-class MotorController(Node):
+class PDController(Node):
     def __init__(self):
-        super().__init__('motor_controller')
-        self.subscription = self.create_subscription(
-            Int32,
-            'encoder_position',
-            self.listener_callback,
-            10)
-        
-        self.controller = PDController(kp=1.0, kd=0.1)
-        self.setpoint = 100  # Hedef pozisyon
-        self.last_time = self.get_clock().now()
+        super().__init__('pd_controller')
 
-        # Pico'ya sinyal gönderilecek seri port
-        self.ser = serial.Serial('/dev/ttyAC1', 115200)  # Port ismini kontrol et
+        # Hedef pozisyonlar (dilersen değiştir)
+        self.target1 = 1000
+        self.target2 = 1000
+
+        self.prev_error1 = 0
+        self.prev_error2 = 0
+
+        self.kp = 0.1
+        self.kd = 0.05
+
+        self.uart = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+
+        self.subscription = self.create_subscription(
+            Int32MultiArray,
+            'encoder_data',
+            self.listener_callback,
+            10
+        )
 
     def listener_callback(self, msg):
-        current_value = msg.data
-        current_time = self.get_clock().now()
-        dt = (current_time - self.last_time).nanoseconds / 1e9
-        self.last_time = current_time
+        pos1 = msg.data[0]
+        pos2 = msg.data[1]
 
-        control_signal = self.controller.compute(self.setpoint, current_value, dt)
+        # Hatalar
+        error1 = self.target1 - pos1
+        error2 = self.target2 - pos2
 
-        # Kontrol sinyalini sınırlayalım (örnek: -100 ile 100 arası)
-        control_signal = max(min(int(control_signal), 100), -100)
+        # PD kontrol hesaplama
+        control_signal1 = self.kp * error1 + self.kd * (error1 - self.prev_error1)
+        control_signal2 = self.kp * error2 + self.kd * (error2 - self.prev_error2)
 
-        # Pico'ya gönder (örnek: "50\n", "-20\n")
-        self.ser.write(f"{control_signal}\n".encode())
+        self.prev_error1 = error1
+        self.prev_error2 = error2
 
-        self.get_logger().info(f'Sent: {control_signal}, Measured: {current_value}')
+        # Saturasyon
+        control_signal1 = max(-100, min(100, int(control_signal1)))
+        control_signal2 = max(-100, min(100, int(control_signal2)))
+
+        # UART ile Pico'ya gönder
+        command = f"{control_signal1},{control_signal2}\n"
+        self.uart.write(command.encode())
+        self.get_logger().info(f"Sent: {command.strip()}")
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MotorController()
+    node = PDController()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
