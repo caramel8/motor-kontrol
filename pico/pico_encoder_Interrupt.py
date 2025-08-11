@@ -6,12 +6,12 @@ import sys
 micropython.alloc_emergency_exception_buf(100)
 
 # --- PINLER (senin verdiğin) ---
-enc1_a = Pin(26, Pin.IN, Pin.PULL_UP)
-enc1_b = Pin(20, Pin.IN, Pin.PULL_UP)
-enc2_a = Pin(2,  Pin.IN, Pin.PULL_UP)
-enc2_b = Pin(3,  Pin.IN, Pin.PULL_UP)
+enc1_a = Pin(11, Pin.IN, Pin.PULL_UP)
+enc1_b = Pin(10, Pin.IN, Pin.PULL_UP)
+enc2_a = Pin(13,  Pin.IN, Pin.PULL_UP)
+enc2_b = Pin(12,  Pin.IN, Pin.PULL_UP)
 # (Haricî 4.7k–10k pull-up önerilir; open-collector için şart gibi)
-encoder_vcc = Pin(0, Pin.OUT)
+encoder_vcc = Pin(14, Pin.OUT)
 encoder_vcc.high()
 
 pos1 = 0
