@@ -4,13 +4,16 @@ import time
 # UART0 (GP0 - RX, GP1 - TX) - Pico'dan Pi'ye veri gönderilecek
 uart = UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1))
 
+encoder_vcc = Pin(14, Pin.Out)
+encoder_vcc.high()
+
 # Motor 1 encoder pinleri (örnek: GP2 ve GP3)
-encoder1_a = Pin(2, Pin.IN)
-encoder1_b = Pin(3, Pin.IN)
+encoder1_a = Pin(11, Pin.IN)
+encoder1_b = Pin(10, Pin.IN)
 
 # Motor 2 encoder pinleri (örnek: GP4 ve GP5)
-encoder2_a = Pin(4, Pin.IN)
-encoder2_b = Pin(5, Pin.IN)
+encoder2_a = Pin(13, Pin.IN)
+encoder2_b = Pin(12, Pin.IN)
 
 position1 = 0
 position2 = 0
