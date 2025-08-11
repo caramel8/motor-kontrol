@@ -7,11 +7,11 @@ class PDController(Node):
     def __init__(self):
         super().__init__('pd_controller')
 
-        # Hedefleri istersen parametre yap
+        # Targets
         self.target1 = self.declare_parameter('target1', 1000).get_parameter_value().integer_value
         self.target2 = self.declare_parameter('target2', 1000).get_parameter_value().integer_value
 
-        # PD kazançları (parametreleştir)
+        # PD gains
         self.kp = self.declare_parameter('kp', 0.1).get_parameter_value().double_value
         self.kd = self.declare_parameter('kd', 0.05).get_parameter_value().double_value
 
