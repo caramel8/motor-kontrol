@@ -47,7 +47,7 @@ enc2_a.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
 enc2_b.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
 
 # ----------------- PWM OUTPUTS -----------------
-motor1_pwm = PWM(Pin(9))   # gerekirse pinleri değiştir
+motor1_pwm = PWM(Pin(9))   # pinleri donanımına göre değiştir
 motor2_pwm = PWM(Pin(4))
 motor1_pwm.freq(1000)
 motor2_pwm.freq(1000)
@@ -69,14 +69,14 @@ poll.register(sys.stdin, uselect.POLLIN)
 last = time.ticks_ms()
 
 while True:
-    # --- USB-CDC'den komut oku: "m1,m2\n" ---
+    # --- USB-CDC'den komut oku: "m1,m2" ---
     if poll.poll(0):  # non-blocking
         line = sys.stdin.readline()
         if line:
             try:
-                line = line.strip()
-                if line:  # boş satır değilse
-                    m1s, m2s = line.split(",", 1)
+                line = line.strip()  # \r\n temizler
+                if (',' in line) and line:
+                    m1s, m2s = line.split(',', 1)
                     c1 = int(m1s)
                     c2 = int(m2s)
                     # saturate
