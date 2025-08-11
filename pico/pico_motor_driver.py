@@ -5,8 +5,8 @@ import time
 uart = UART(0, baudrate=115200, rx=Pin(1), tx=Pin(0))
 
 # İki motorun PWM pinleri (örnek: GP15 ve GP14)
-motor1_pwm = PWM(Pin(15))
-motor2_pwm = PWM(Pin(14))
+motor1_pwm = PWM(Pin(9))
+motor2_pwm = PWM(Pin(4))
 motor1_pwm.freq(1000)
 motor2_pwm.freq(1000)
 
