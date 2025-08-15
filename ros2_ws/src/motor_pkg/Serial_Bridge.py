@@ -8,21 +8,22 @@ class SerialBridge(Node):
     def __init__(self):
         super().__init__('serial_bridge')
 
-        # Parametreler
+        # Parametreler (Mac'te genelde /dev/tty.usbmodemxxx olur)
         port = self.declare_parameter('port', '/dev/ttyACM0').get_parameter_value().string_value
         baud = self.declare_parameter('baud', 115200).get_parameter_value().integer_value
-        self.echo = self.declare_parameter('echo', True).get_parameter_value().bool_value  # ekrana yaz
+        self.echo = self.declare_parameter('echo', True).get_parameter_value().bool_value
 
-        # Seri portu aç
+        # Seri port
         self.ser = serial.Serial(port, baudrate=baud, timeout=0.1, write_timeout=0.1)
         try:
-            # MicroPython USB-CDC çoğu sistemde DTR=TRUE istiyor
+            # MicroPython USB-CDC çoğu sistemde DTR=TRUE ister
             self.ser.dtr = True
             self.ser.rts = False
+            self.ser.reset_input_buffer()
         except Exception:
             pass
 
-        # Pub/Sub
+        # ROS pub/sub
         self.pub_enc = self.create_publisher(Int32MultiArray, 'encoder_data', 10)
         self.sub_cmd = self.create_subscription(Int32MultiArray, 'motor_cmd', self.cmd_cb, 10)
 
@@ -32,41 +33,55 @@ class SerialBridge(Node):
         self.get_logger().info(f'Opened {port} @ {baud}')
 
     def loop(self):
-        # 1) Satırı oku
+        # 1) Satır oku
         line = self.ser.readline()
         if not line:
             return
 
         s = line.decode('ascii', errors='ignore').strip()
-
-        # 2) Parse etmeyi dene
-        try:
-            a_str, b_str = s.split(',', 1)
-            a = int(a_str.strip())
-            b = int(b_str.strip())
-        except Exception:
-            # parse edemediysek (ör. traceback/çöp satır), istersen göster
-            if self.echo:
-                self.get_logger().info(f'RAW: {s}')
+        if not s:
             return
 
-        # 3) Ekrana yaz + publish et
+        # 2) 4 sayı bekliyoruz: pos1,pos2,pos3,pos4
+        parts = s.split(',')
+        if len(parts) < 4:
+            if self.echo:
+                self.get_logger().info(f'RAW<4: {s}')
+            return
+
+        try:
+            vals = [int(parts[i].strip()) for i in range(4)]
+        except Exception:
+            if self.echo:
+                self.get_logger().info(f'RAW_ERR: {s}')
+            return
+
+        # 3) Log + publish
         if self.echo:
-            self.get_logger().info(f'ENC: {a},{b}')
+            self.get_logger().info(f'ENC: {vals[0]},{vals[1]},{vals[2]},{vals[3]}')
 
         msg = Int32MultiArray()
-        msg.data = [a, b]
+        msg.data = vals  # [pos1,pos2,pos3,pos4]
         self.pub_enc.publish(msg)
 
     def cmd_cb(self, msg: Int32MultiArray):
-        # Gelen komutu pico'ya geri yaz (opsiyonel ama kalsın)
+        """[u1,u2,u3,u4] duty (−100..100) → "u1,u2,u3,u4\\r\\n" yaz."""
         try:
-            m1 = int(max(-100, min(100, msg.data[0])))
-            m2 = int(max(-100, min(100, msg.data[1])))
-            self.ser.write(f"{m1},{m2}\r\n".encode('ascii', errors='ignore'))
+            data = list(msg.data)
+            # Eksikse 0 ile tamamla, fazlaysa kırp
+            if len(data) < 4:
+                data += [0] * (4 - len(data))
+            elif len(data) > 4:
+                data = data[:4]
+
+            # Saturate ve int'e çevir
+            m = [int(max(-100, min(100, v))) for v in data]
+            out = f"{m[0]},{m[1]},{m[2]},{m[3]}\r\n".encode('ascii', errors='ignore')
+            self.ser.write(out)
             self.ser.flush()
-        except Exception:
-            pass
+        except Exception as e:
+            if self.echo:
+                self.get_logger().info(f'WRITE_ERR: {e}')
 
 def main(args=None):
     rclpy.init(args=args)
@@ -77,5 +92,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
-
