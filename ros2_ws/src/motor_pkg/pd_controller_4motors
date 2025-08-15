@@ -4,7 +4,7 @@ from rclpy.node import Node
 from std_msgs.msg import Int32MultiArray
 from typing import List
 
-class PDController4(Node):
+class PDController(Node):
     def __init__(self):
         super().__init__('pd_controller_4')
 
@@ -100,7 +100,7 @@ class PDController4(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = PDController4()
+    node = PDController()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
