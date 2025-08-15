@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Int32MultiArray
+from typing import List
+
+def wrap_err(a: int, b: int, M: int) -> int:
+    """a-b farkını dairesel eksende [-M/2, M/2) aralığına sar."""
+    return int((a - b + M//2) % M - M//2)
+
+class PhaseLockPD4(Node):
+    def __init__(self):
+        super().__init__('pd_controller_phase_lock_4')
+
+        # ===== Genel parametreler =====
+        self.cpr = self.declare_parameter('cpr', 2000).get_parameter_value().integer_value
+        self.mode = self.declare_parameter('mode', 'pairs').get_parameter_value().string_value  # 'pairs' veya 'star'
+        self.log  = self.declare_parameter('log', True).get_parameter_value().bool_value
+
+        # Duty şekillendirme
+        self.dead    = self.declare_parameter('dead', 20.0).get_parameter_value().double_value
+        self.min_run = self.declare_parameter('min_run', 40.0).get_parameter_value().double_value
+
+        # ===== pairs modu parametreleri =====
+        # Lider hedefleri (ticks)
+        self.targets_pairs = self._get_param_list('targets_pairs', [1000, 1000], n=2, cast=float)
+        # Takipçiler için faz (derece) [pair1, pair2]
+        self.phase_deg_pairs = self._get_param_list('phase_deg_pairs', [30.0, 30.0], n=2, cast=float)
+
+        # Lider PD kazançları (abs pozisyon PD)
+        self.kp_abs_pairs = self._get_param_list('kp_abs_pairs', 0.10, n=2, cast=float)
+        self.kd_abs_pairs = self._get_param_list('kd_abs_pairs', 0.05, n=2, cast=float)
+        # Takipçi faz PD kazançları
+        self.kp_phase_pairs = self._get_param_list('kp_phase_pairs', 0.15, n=2, cast=float)
+        self.kd_phase_pairs = self._get_param_list('kd_phase_pairs', 0.06, n=2, cast=float)
+
+        # ===== star modu parametreleri =====
+        self.leader_idx = int(self.declare_parameter('leader_idx', 0).get_parameter_value().integer_value)
+        # Lider hedefi (tek değer)
+        self.target_star = float(self.declare_parameter('target_star', 1000).get_parameter_value().double_value)
+        # Lider için pozisyon PD kazancı
+        self.kp_abs_star = float(self.declare_parameter('kp_abs_star', 0.10).get_parameter_value().double_value)
+        self.kd_abs_star = float(self.declare_parameter('kd_abs_star', 0.05).get_parameter_value().double_value)
+        # Takipçiler için faz (3 değer; lider hariç kalan motorların sırasına göre)
+        self.phase_deg_star = self._get_param_list('phase_deg_star', [30.0, 30.0, 30.0], n=3, cast=float)
+        self.kp_phase_star  = float(self.declare_parameter('kp_phase_star', 0.15).get_parameter_value().double_value)
+        self.kd_phase_star  = float(self.declare_parameter('kd_phase_star', 0.06).get_parameter_value().double_value)
+
+        # Faz offsetlerini conta cinsine çevir
+        self.offset_pairs = [round(self.cpr * d / 360.0) for d in self.phase_deg_pairs]
+        self.offset_star  = [round(self.cpr * d / 360.0) for d in self.phase_deg_star]
+
+        # Durum (D terimi için önceki hatalar ve zaman)
+        self.prev_t = None
+        # pairs: [lider1_err, lider2_err, takip1_phase_err, takip2_phase_err]
+        self.prev_err_pairs = [0.0, 0.0, 0.0, 0.0]
+        # star: lider pozisyon hatası + 3 takip faz hatası
+        self.prev_err_star = [0.0, 0.0, 0.0, 0.0]
+
+        # ROS I/O
+        self.sub_enc = self.create_subscription(Int32MultiArray, 'encoder_data', self.enc_cb, 10)
+        self.pub_cmd = self.create_publisher(Int32MultiArray, 'motor_cmd', 10)
+
+        self.get_logger().info(
+            f"PhaseLockPD4 ready | mode={self.mode} | cpr={self.cpr} | dead={self.dead} min_run={self.min_run}\n"
+            f"pairs: targets={self.targets_pairs}, phase_deg={self.phase_deg_pairs}, "
+            f"kp_abs={self.kp_abs_pairs}, kd_abs={self.kd_abs_pairs}, "
+            f"kp_phase={self.kp_phase_pairs}, kd_phase={self.kd_phase_pairs}\n"
+            f"star: leader_idx={self.leader_idx}, target={self.target_star}, "
+            f"phase_deg_star={self.phase_deg_star}, "
+            f"kp_abs_star={self.kp_abs_star}, kd_abs_star={self.kd_abs_star}, "
+            f"kp_phase_star={self.kp_phase_star}, kd_phase_star={self.kd_phase_star}"
+        )
+
+    # ---------- yardımcılar ----------
+    def _get_param_list(self, name, default, n=None, cast=float) -> List[float]:
+        """
+        Parametreyi dizi olarak okur; tek değer gelirse n kez tekrarlar.
+        """
+        p = self.declare_parameter(name, default).get_parameter_value()
+        vals: List[float] = []
+        # double/int array?
+        if hasattr(p, 'double_array_value') and len(p.double_array_value) > 0:
+            vals = list(p.double_array_value)
+        elif hasattr(p, 'integer_array_value') and len(p.integer_array_value) > 0:
+            vals = [float(v) for v in p.integer_array_value]
+        # tekil?
+        elif hasattr(p, 'double_value') and p.type == p.Type.DOUBLE:
+            vals = [p.double_value]
+        elif hasattr(p, 'integer_value') and p.type == p.Type.INTEGER:
+            vals = [float(p.integer_value)]
+        else:
+            vals = default if isinstance(default, list) else [default]
+
+        vals = [cast(v) for v in vals]
+        if n is not None:
+            if len(vals) < n:
+                vals += [vals[-1]] * (n - len(vals))
+            elif len(vals) > n:
+                vals = vals[:n]
+        return vals
+
+    def _sat(self, u: float, low_end=-100.0, high_end=100.0) -> float:
+        return high_end if u > high_end else low_end if u < low_end else u
+
+    def _shape(self, u: float) -> int:
+        """
+        |u| < dead -> 0
+        dead <= |u| < min_run -> sign(u)*min_run
+        else -> saturate
+        """
+        s = 1 if u >= 0 else -1
+        a = abs(u)
+        if a < self.dead:
+            return 0
+        if a < self.min_run:
+            return int(s * self.min_run)
+        return int(self._sat(u, -100.0, 100.0))
+
+    # ---------- ana callback ----------
+    def enc_cb(self, msg: Int32MultiArray):
+        data = list(msg.data)
+        if len(data) < 4:
+            data += [data[-1] if data else 0] * (4 - len(data))
+        pos = [int(x) for x in data[:4]]
+
+        # dt hesabı
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self.prev_t is None:
+            self.prev_t = now
+            return
+        dt = now - self.prev_t
+        if dt <= 0:
+            dt = 1e-3
+        self.prev_t = now
+
+        u = [0, 0, 0, 0]  # çıkış duty’leri
+
+        if self.mode == 'star':
+            # ---- STAR MODU ----
+            L = int(max(0, min(3, self.leader_idx)))
+            # Lider: mutlak hedefe PD
+            errL = float(self.target_star - pos[L])
+            derrL = (errL - self.prev_err_star[0]) / dt
+            u[L] = self._shape(self.kp_abs_star * errL + self.kd_abs_star * derrL)
+            self.prev_err_star[0] = errL
+
+            # Takipçiler: faz kilidi
+            angL = pos[L] % self.cpr
+            # Lider dışındaki index’leri sırayla topla
+            follow_idx = [i for i in range(4) if i != L]
+            for k, i in enumerate(follow_idx):
+                ang_i = pos[i] % self.cpr
+                ref_i = (angL - self.offset_star[k]) % self.cpr
+                ephi = wrap_err(ang_i, ref_i, self.cpr)
+                dephi = (ephi - self.prev_err_star[k+1]) / dt
+                u[i] = self._shape(self.kp_phase_star * ephi + self.kd_phase_star * dephi)
+                self.prev_err_star[k+1] = ephi
+
+        else:
+            # ---- PAIRS MODU (varsayılan) ----
+            # Çift 1: (0 lider, 1 takip)
+            err0 = float(self.targets_pairs[0] - pos[0])
+            derr0 = (err0 - self.prev_err_pairs[0]) / dt
+            u[0] = self._shape(self.kp_abs_pairs[0] * err0 + self.kd_abs_pairs[0] * derr0)
+            self.prev_err_pairs[0] = err0
+
+            ang0 = pos[0] % self.cpr
+            ang1 = pos[1] % self.cpr
+            ref1 = (ang0 - self.offset_pairs[0]) % self.cpr
+            ephi1 = wrap_err(ang1, ref1, self.cpr)
+            dephi1 = (ephi1 - self.prev_err_pairs[2]) / dt
+            u[1] = self._shape(self.kp_phase_pairs[0] * ephi1 + self.kd_phase_pairs[0] * dephi1)
+            self.prev_err_pairs[2] = ephi1
+
+            # Çift 2: (2 lider, 3 takip)
+            err2 = float(self.targets_pairs[1] - pos[2])
+            derr2 = (err2 - self.prev_err_pairs[1]) / dt
+            u[2] = self._shape(self.kp_abs_pairs[1] * err2 + self.kd_abs_pairs[1] * derr2)
+            self.prev_err_pairs[1] = err2
+
+            ang2 = pos[2] % self.cpr
+            ang3 = pos[3] % self.cpr
+            ref3 = (ang2 - self.offset_pairs[1]) % self.cpr
+            ephi3 = wrap_err(ang3, ref3, self.cpr)
+            dephi3 = (ephi3 - self.prev_err_pairs[3]) / dt
+            u[3] = self._shape(self.kp_phase_pairs[1] * ephi3 + self.kd_phase_pairs[1] * dephi3)
+            self.prev_err_pairs[3] = ephi3
+
+        # Yayınla
+        out = Int32MultiArray()
+        out.data = [int(x) for x in u]
+        self.pub_cmd.publish(out)
+
+        if self.log:
+            if self.mode == 'star':
+                self.get_logger().info(f"[star] u={u} pos={pos} leader={self.leader_idx}")
+            else:
+                self.get_logger().info(f"[pairs] u={u} pos={pos}")
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PhaseLockPD4()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
