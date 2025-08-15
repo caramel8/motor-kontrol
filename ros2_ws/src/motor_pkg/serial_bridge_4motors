@@ -9,7 +9,7 @@ class SerialBridge4(Node):
         super().__init__('serial_bridge_4')
 
         # Parametreler (Mac'te genelde /dev/tty.usbmodemxxx olur)
-        port = self.declare_parameter('port', '/dev/tty.usbmodem101').get_parameter_value().string_value
+        port = self.declare_parameter('port', '/dev/ttyACM0').get_parameter_value().string_value
         baud = self.declare_parameter('baud', 115200).get_parameter_value().integer_value
         self.echo = self.declare_parameter('echo', True).get_parameter_value().bool_value
 
