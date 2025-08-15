@@ -5,7 +5,7 @@ import micropython, time, sys, uselect
 micropython.alloc_emergency_exception_buf(128)
 
 # -------------------------------------------------------------------
-# PIN HARİTASI (SENİN VERDİĞİN ENCODER PINLERİ)
+# PIN HARİTASI (ENCODERLER)
 # -------------------------------------------------------------------
 # Encoder 1 (Motor 1)
 ENC1_A_PIN = 13
@@ -20,24 +20,28 @@ ENC3_B_PIN = 2
 ENC4_A_PIN = 0
 ENC4_B_PIN = 1
 
-# Harici 4.7k–10k pull-up önerilir (open-collector için şart)
-encoder_vcc = Pin(14, Pin.OUT)
-encoder_vcc.high()  # Encoder grubu-1 (ör. Motor1-2) beslemesi
+# -------------------------------------------------------------------
+# ENCODER BESLEME (GPIO ile 3.3V enable hatları)
+# Uyarı: GPIO'dan akım sınırlıdır; düşük akım modüller için uygundur.
+# -------------------------------------------------------------------
+encoder_vcc  = Pin(14, Pin.OUT); encoder_vcc.high()   # Grup-1 (örn. Enc1-2)
+encoder_vcc2 = Pin(26, Pin.OUT); encoder_vcc2.high()  # Grup-2 (örn. Enc3)
+encoder_vcc3 = Pin(27, Pin.OUT); encoder_vcc3.high()  # Grup-3 (örn. Enc4)
 
-# --- Ek 3.3V enable hatları (GPIO26 ve GPIO27) ---
-encoder_vcc2 = Pin(26, Pin.OUT)
-encoder_vcc3 = Pin(27, Pin.OUT)
-encoder_vcc2.high()  # Encoder grubu-2 (ör. Motor3)
-encoder_vcc3.high()  # Encoder grubu-3 (ör. Motor4)
+def set_encoder_power(idx, on: bool):
+    """idx: 1 -> GP14, 2 -> GP26, 3 -> GP27"""
+    lvl = 1 if on else 0
+    if idx == 1:
+        encoder_vcc.value(lvl)
+    elif idx == 2:
+        encoder_vcc2.value(lvl)
+    elif idx == 3:
+        encoder_vcc3.value(lvl)
 
-
-encoder_vcc2 = Pin(26, Pin.OUT)
-encoder_vcc3 = Pin(27, Pin.OUT)
-encoder_vcc2.high()  # Encoder grubu-2 (ör. Motor3)
-encoder_vcc3.high()  # Encoder grubu-3 (ör. Motor4)
-
-
-# L298N #1 (Motor1 & Motor2) — IN ve EN (PWM)
+# -------------------------------------------------------------------
+# L298N BAĞLANTILARI (Motor1..4) — IN ve EN(PWM)
+# -------------------------------------------------------------------
+# L298N #1 (Motor1 & Motor2)
 M1_IN1_PIN = 7    # Motor1 yön
 M1_IN2_PIN = 8
 M1_EN_PIN  = 9    # Motor1 PWM (ENA)
@@ -65,16 +69,11 @@ enc_pins = [
     (ENC4_A_PIN, ENC4_B_PIN),
 ]
 
-# GPIO nesneleri
 encoders = []
 for a_pin, b_pin in enc_pins:
     a = Pin(a_pin, Pin.IN, Pin.PULL_UP)
     b = Pin(b_pin, Pin.IN, Pin.PULL_UP)
     encoders.append((a, b))
-
-if ENC_VCC_ENABLE:
-    encoder_vcc = Pin(ENC_VCC_PIN, Pin.OUT)
-    encoder_vcc.high()
 
 # Sayaçlar
 pos = [0, 0, 0, 0]
@@ -83,7 +82,7 @@ for i in range(4):
     a, b = encoders[i]
     prev.append((a.value() << 1) | b.value())
 
-# Quadrature komşu-geçiş tablosu
+# Quadrature komşu-geçiş tablosu (hatalı sıçramaları 0 sayar)
 trans = {
     0b00: {0b01:+1, 0b10:-1},
     0b01: {0b11:+1, 0b00:-1},
@@ -188,3 +187,4 @@ while True:
         last = now
 
     time.sleep_ms(1)
+
