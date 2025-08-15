@@ -20,9 +20,16 @@ ENC3_B_PIN = 2
 ENC4_A_PIN = 0
 ENC4_B_PIN = 1
 
-# Encoder besleme (opsiyonel, open-collector ise faydalı)
-ENC_VCC_PIN = 14
-ENC_VCC_ENABLE = True
+# Harici 4.7k–10k pull-up önerilir (open-collector için şart)
+encoder_vcc = Pin(14, Pin.OUT)
+encoder_vcc.high()  # Encoder grubu-1 (ör. Motor1-2) beslemesi
+
+# --- Ek 3.3V enable hatları (GPIO26 ve GPIO27) ---
+encoder_vcc2 = Pin(26, Pin.OUT)
+encoder_vcc3 = Pin(27, Pin.OUT)
+encoder_vcc2.high()  # Encoder grubu-2 (ör. Motor3)
+encoder_vcc3.high()  # Encoder grubu-3 (ör. Motor4)
+
 
 encoder_vcc2 = Pin(26, Pin.OUT)
 encoder_vcc3 = Pin(27, Pin.OUT)
