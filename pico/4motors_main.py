@@ -50,12 +50,12 @@ M2_IN2_PIN = 6
 M2_EN_PIN  = 4    # Motor2 PWM (ENB)
 
 # L298N #2 (Motor3 & Motor4)
-M4_IN1_PIN = 17   # Motor3 yön
+M4_IN1_PIN = 17   # Motor4 yön
 M4_IN2_PIN = 16
-M4_EN_PIN  = 18   # Motor3 PWM
-M3_IN1_PIN = 20   # Motor4 yön
+M4_EN_PIN  = 18   # Motor4 PWM
+M3_IN1_PIN = 20   # Motor3 yön
 M3_IN2_PIN = 21
-M3_EN_PIN  = 19   # Motor4 PWM
+M3_EN_PIN  = 19   # Motor3 PWM
 
 PWM_FREQ_HZ = 1000
 
@@ -149,42 +149,85 @@ def set_motor(idx, percent):
     motors[idx-1].set_percent(percent)
 
 # -------------------------------------------------------------------
-# USB-CDC I/O
+# USB-CDC I/O + KONTROL KOMUTLARI
+# Komutlar:
+#  "m1,m2,m3,m4" → duty(%), -100..100
+#  "Z" → pos sayaçlarını sıfırla
+#  "P" → yayını durdur (stream=False)
+#  "S" → yayını başlat (stream=True)
+#  "G" → tek seferlik anlık pozisyon yazdır (POS:p1,p2,p3,p4)
+#  "R" → soft reset
 # -------------------------------------------------------------------
 poll = uselect.poll()
 poll.register(sys.stdin, uselect.POLLIN)
 
+stream = False  # başta sessiz; PC isterse S ile başlatır
 last = time.ticks_ms()
 
+def _ack(txt):
+    try:
+        sys.stdout.write(txt + "\r\n")
+        if hasattr(sys.stdout, "flush"):
+            sys.stdout.flush()
+    except Exception:
+        pass
+
 while True:
-    # Komut: "m1,m2,m3,m4"  örn: "30,-30,0,50"
-    if poll.poll(0):
+    # --- USB-CDC'den komut oku ---
+    if poll.poll(0):  # non-blocking
         line = sys.stdin.readline()
         if line:
             try:
                 s = line.strip()
-                if s and (',' in s):
+                if not s:
+                    pass
+                elif s == 'Z':
+                    # tüm encoder sayaçlarını sıfırla
+                    pos[0] = pos[1] = pos[2] = pos[3] = 0
+                    _ack("OKZ")
+                elif s == 'P':
+                    stream = False
+                    _ack("OKP")
+                elif s == 'S':
+                    stream = True
+                    _ack("OKS")
+                elif s == 'G':
+                    _ack("POS:%d,%d,%d,%d" % (pos[0], pos[1], pos[2], pos[3]))
+                elif s == 'R':
+                    import machine
+                    _ack("OKR")
+                    machine.soft_reset()
+                elif ',' in s:
                     parts = s.split(',')
-                    vals = [int(x) for x in parts[:4]]
+                    vals = []
+                    for x in parts[:4]:
+                        try:
+                            v = int(x)
+                        except:
+                            v = 0
+                        if v < -100: v = -100
+                        if v >  100: v =  100
+                        vals.append(v)
                     while len(vals) < 4:
                         vals.append(0)
                     set_motor(1, vals[0])
                     set_motor(2, vals[1])
                     set_motor(3, vals[2])
                     set_motor(4, vals[3])
+                # diğer her şeyi yok say
             except Exception:
                 pass  # format hatalarını sessizce yut
 
-    # 100 Hz encoder raporu: "p1,p2,p3,p4"
+    # --- 100 Hz encoder raporu: "p1,p2,p3,p4" ---
     now = time.ticks_ms()
     if time.ticks_diff(now, last) >= 10:
         try:
-            sys.stdout.write(f"{pos[0]},{pos[1]},{pos[2]},{pos[3]}\r\n")
-            if hasattr(sys.stdout, "flush"):
-                sys.stdout.flush()
+            if stream:
+                sys.stdout.write(f"{pos[0]},{pos[1]},{pos[2]},{pos[3]}\r\n")
+                if hasattr(sys.stdout, "flush"):
+                    sys.stdout.flush()
         except Exception:
             pass
         last = now
 
     time.sleep_ms(1)
-
