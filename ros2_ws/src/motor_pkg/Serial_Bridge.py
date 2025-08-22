@@ -20,8 +20,10 @@ class SerialBridge(Node):
             self.ser.dtr = True
             self.ser.rts = False
             self.ser.reset_input_buffer()
+
         except Exception:
             pass
+        self._bootstrap_pico()
 
         # ROS pub/sub
         self.pub_enc = self.create_publisher(Int32MultiArray, 'encoder_data', 10)
@@ -31,6 +33,27 @@ class SerialBridge(Node):
         self.timer = self.create_timer(0.01, self.loop)
 
         self.get_logger().info(f'Opened {port} @ {baud}')
+    
+    def _bootstrap_pico(self):
+        try:
+            import time
+            # Güvenli başlangıç: önce stream'i kapat, sonra sayaçları sıfırla, sonra aç
+            self.ser.write(b'P\r\n')
+            time.sleep(0.05)
+            self.ser.write(b'Z\r\n')
+            time.sleep(0.05)
+            self.ser.write(b'S\r\n')
+            self.ser.flush()
+
+            # İlk birkaç ACK satırını temizle (OKP/OKZ/OKS vs.)
+            t0 = time.time()
+            while time.time() - t0 < 0.3:  # ~300ms boyunca gelenleri at
+                _ = self.ser.readline()
+            if self.echo:
+                self.get_logger().info('Pico init: P,Z,S sent; acks drained')
+        except Exception as e:
+            if self.echo:
+                self.get_logger().warn(f'INIT_ERR: {e}')
 
     def loop(self):
         # 1) Satır oku
