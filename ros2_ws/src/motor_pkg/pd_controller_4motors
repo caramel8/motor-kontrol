@@ -92,7 +92,7 @@ class PDController(Node):
             cmds.append(self._shape(u))
 
         # Gerekirse bu logu azalt
-        self.get_logger().info(f"u={cmds}  err={[int(self.targets[i])-int(pos[i]) for i in range(4)]}")
+        self.get_logger().info(f"u={cmds}  err={[int(self.targets[i])-int(pos[i]) for i in range(4)]} ")
 
         out = Int32MultiArray()
         out.data = cmds  # [u1,u2,u3,u4]
