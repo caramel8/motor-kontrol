@@ -14,7 +14,7 @@ class PhaseLockPD(Node):
         # === Parametreler ===
         self.cpr        = int(self.declare_parameter('cpr', 2000).value)
         self.phase_deg  = float(self.declare_parameter('phase_deg', 30.0).value)
-        # Mutlak hedefi Motor 4 kullanacak; geriye dönük uyum için 'target1' ismini korunmuş tuttum
+        # Mutlak hedefi Motor 4 kullanır (isim target1 ama Motor4 içindir)
         self.target1    = int(self.declare_parameter('target1', 1000).value)
 
         # Kazançlar
@@ -25,15 +25,15 @@ class PhaseLockPD(Node):
 
         # Şekillendirme
         self.dead       = float(self.declare_parameter('dead', 20.0).value)
-        self.min_run    = float(self.declare_parameter('min_run', 40.0).value)
+        self.min_run    = float(self.declare_parameter('min_run', 80.0).value)
         self.log        = bool(self.declare_parameter('log', True).value)
 
-        # Faz offset (counts) — “geride” varsayımıyla ref = ang4 - offset
+        # Faz offset (counts) — “geride” için ref = ang4 - offset
         self.offset_counts = round(self.cpr * self.phase_deg / 360.0)
 
         # Durum
-        self.prev_err_abs = 0.0           # Motor4 için
-        self.prev_err_phase = [0.0, 0.0, 0.0]  # M1, M2, M3 için
+        self.prev_err_abs = 0.0                 # Motor4 için
+        self.prev_err_phase = [0.0, 0.0, 0.0]   # M1, M2, M3 için
         self.prev_t = None
 
         # ROS I/O
@@ -88,24 +88,25 @@ class PhaseLockPD(Node):
         ang3 = pos3 % self.cpr
         ang4 = pos4 % self.cpr
 
+        
+        
+
         # Referanslar:
         ref1  = ang4                                  # M1 = M4 ile aynı faz
         ref23 = (ang4 - self.offset_counts) % self.cpr  # M2 = M3 = M4'ten phase_deg geride
 
-        # --- Motor1 faz PD (ang1 -> ref1) ---
-        e1   = wrap_err(ang1, ref1, self.cpr)
+        # --- Faz PD'leri (DOĞRU İŞARET: referans - ölçüm) ---
+        e1   = wrap_err(ref1,  ang1,  self.cpr)
         de1  = (e1 - self.prev_err_phase[0]) / dt
         u1   = self.kp_phase * e1 + self.kd_phase * de1
         self.prev_err_phase[0] = e1
 
-        # --- Motor2 faz PD (ang2 -> ref23) ---
-        e2   = wrap_err(ang2, ref23, self.cpr)
+        e2   = wrap_err(ref23, ang2,  self.cpr)
         de2  = (e2 - self.prev_err_phase[1]) / dt
         u2   = self.kp_phase * e2 + self.kd_phase * de2
         self.prev_err_phase[1] = e2
 
-        # --- Motor3 faz PD (ang3 -> ref23) ---
-        e3   = wrap_err(ang3, ref23, self.cpr)
+        e3   = wrap_err(ref23, ang3,  self.cpr)
         de3  = (e3 - self.prev_err_phase[2]) / dt
         u3   = self.kp_phase * e3 + self.kd_phase * de3
         self.prev_err_phase[2] = e3
@@ -120,9 +121,15 @@ class PhaseLockPD(Node):
         out.data = [u1, u2, u3, u4]
         self.pub_cmd.publish(out)
 
+        #yazdırmak için 
+        e1_deg=e1/self.cpr*360
+        e2_deg=e2/self.cpr*360
+        e3_deg=e3/self.cpr*360
+
+
         if self.log:
             self.get_logger().info(
-                f"u=[{u1},{u2},{u3},{u4}] | ang=[{ang1},{ang2},{ang3},{ang4}] | ref1={ref1} ref23={ref23}"
+                f"u=[{u1},{u2},{u3},{u4}] | ang=[{ang1},{ang2},{ang3},{ang4}] | ref1={ref1} ref23={ref23} | e=[{e1},{e2},{e3}] err_abs={err_abs} angle_diff_in_degree={e1_deg},{e2_deg} {e3_deg}"
             )
 
 def main(args=None):
