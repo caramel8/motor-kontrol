@@ -61,16 +61,16 @@ enc2_a.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
 enc2_b.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
 
 # ----------------- L298N DIRECTION PINS (Safe Pico W pins) -----------------
-# IN1, IN2, IN3, IN4 -> GP7, GP8, GP5, GP6 (all safe)
-IN1 = Pin(7, Pin.OUT);  IN1.low()
-IN2 = Pin(8, Pin.OUT);  IN2.low()
-IN3 = Pin(5, Pin.OUT);  IN3.low()
-IN4 = Pin(6, Pin.OUT);  IN4.low()
+# IN1, IN2, IN3, IN4 -> GP21, GP22, GP6, GP7 (all safe)
+IN1 = Pin(21, Pin.OUT);  IN1.low()
+IN2 = Pin(22, Pin.OUT);  IN2.low()
+IN3 = Pin(6, Pin.OUT);  IN3.low()
+IN4 = Pin(7, Pin.OUT);  IN4.low()
 
 # ----------------- PWM OUTPUTS (ENA/ENB) -----------------
-# ENA -> GP9, ENB -> GP4 (PWM) - both safe
-motor1_pwm = PWM(Pin(9))   # Motor1 hız (ENA)
-motor2_pwm = PWM(Pin(4))   # Motor2 hız (ENB)
+# ENA -> GP20, ENB -> GP8 (PWM) - both safe
+motor1_pwm = PWM(Pin(20))   # Motor1 hız (ENA)
+motor2_pwm = PWM(Pin(8))   # Motor2 hız (ENB)
 motor1_pwm.freq(1000)
 motor2_pwm.freq(1000)
 
