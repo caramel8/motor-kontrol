@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Int32MultiArray
+import serial
+
+class SerialBridge(Node):
+    def __init__(self):
+        super().__init__('serial_bridge')
+
+        # Parametreler (Mac'te genelde /dev/tty.usbmodemxxx olur)
+        port = self.declare_parameter('port', '/dev/ttyACM0').get_parameter_value().string_value
+        baud = self.declare_parameter('baud', 115200).get_parameter_value().integer_value
+        self.echo = self.declare_parameter('echo', True).get_parameter_value().bool_value
+
+        # Seri port
+        self.ser = serial.Serial(port, baudrate=baud, timeout=0.1, write_timeout=0.1)
+        try:
+            # MicroPython USB-CDC çoğu sistemde DTR=TRUE ister
+            self.ser.dtr = True
+            self.ser.rts = False
+            self.ser.reset_input_buffer()
+
+        except Exception:
+            pass
+        self._bootstrap_pico()
+
+        # ROS pub/sub
+        self.pub_enc = self.create_publisher(Int32MultiArray, 'encoder_data', 10)
+        self.sub_cmd = self.create_subscription(Int32MultiArray, 'motor_cmd', self.cmd_cb, 10)
+
+        # 100 Hz döngü
+        self.timer = self.create_timer(0.01, self.loop)
+
+        self.get_logger().info(f'Opened {port} @ {baud}')
+    
+    def _bootstrap_pico(self):
+        try:
+            import time
+            # Güvenli başlangıç: önce stream'i kapat, sonra sayaçları sıfırla, sonra aç
+            self.ser.write(b'P\r\n')
+            time.sleep(0.05)
+            self.ser.write(b'Z\r\n')
+            time.sleep(0.05)
+            self.ser.write(b'S\r\n')
+            self.ser.flush()
+
+            # İlk birkaç ACK satırını temizle (OKP/OKZ/OKS vs.)
+            t0 = time.time()
+            while time.time() - t0 < 0.3:  # ~300ms boyunca gelenleri at
+                _ = self.ser.readline()
+            if self.echo:
+                self.get_logger().info('Pico init: P,Z,S sent; acks drained')
+        except Exception as e:
+            if self.echo:
+                self.get_logger().warn(f'INIT_ERR: {e}')
+
+    def loop(self):
+        # 1) Satır oku
+        line = self.ser.readline()
+        if not line:
+            return
+
+        s = line.decode('ascii', errors='ignore').strip()
+        if not s:
+            return
+
+        # 2) 4 sayı bekliyoruz: pos1,pos2,pos3,pos4
+        parts = s.split(',')
+        if len(parts) < 4:
+            if self.echo:
+                self.get_logger().info(f'RAW<4: {s}')
+            return
+
+        try:
+            vals = [int(parts[i].strip()) for i in range(4)]
+        except Exception:
+            if self.echo:
+                self.get_logger().info(f'RAW_ERR: {s}')
+            return
+
+        # 3) Log + publish
+        if self.echo:
+            self.get_logger().info(f'ENC: {vals[0]},{vals[1]},{vals[2]},{vals[3]}')
+
+        msg = Int32MultiArray()
+        msg.data = vals  # [pos1,pos2,pos3,pos4]
+        self.pub_enc.publish(msg)
+
+    def cmd_cb(self, msg: Int32MultiArray):
+        """[u1,u2,u3,u4] duty (−100..100) → "u1,u2,u3,u4\\r\\n" yaz."""
+        try:
+            data = list(msg.data)
+            # Eksikse 0 ile tamamla, fazlaysa kırp
+            if len(data) < 4:
+                data += [0] * (4 - len(data))
+            elif len(data) > 4:
+                data = data[:4]
+
+            # Saturate ve int'e çevir
+            m = [int(max(-100, min(100, v))) for v in data]
+            out = f"{m[0]},{m[1]},{m[2]},{m[3]}\r\n".encode('ascii', errors='ignore')
+            self.ser.write(out)
+            self.ser.flush()
+        except Exception as e:
+            if self.echo:
+                self.get_logger().info(f'WRITE_ERR: {e}')
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SerialBridge()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
