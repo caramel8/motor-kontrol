@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Int32MultiArray
+from typing import List, Union
+
+Number = Union[int, float]
+
+class PDController(Node):
+    def __init__(self):
+        super().__init__('pd_controller')
+
+        # ===== Parametreler =====
+        # targets skaler ya da liste gelebilir → 4 elemana uyarlıyoruz
+        targets_param = self.declare_parameter('targets', [1000, 1000, 1000, 1000])
+        self.targets: List[int] = self._as_int_list(targets_param.value, 4, 1000)
+
+        # kp/kd skaler veya liste olabilir
+        kp_param = self.declare_parameter('kp', 0.3)
+        kd_param = self.declare_parameter('kd', 0.1)
+        self.kp_list: List[float] = self._as_float_list(kp_param.value, 4, 0.3)
+        self.kd_list: List[float] = self._as_float_list(kd_param.value, 4, 0.1)
+
+        # Ölü bölge ve minimum çalışma
+        self.dead    = float(self.declare_parameter('dead', 20.0).value)
+        self.min_run = float(self.declare_parameter('min_run', 40.0).value)
+
+        # Önceki hatalar (D terimi)
+        self.prev_err = [0.0, 0.0, 0.0, 0.0]
+
+        # ROS arayüzleri (isimleri değiştirmedim)
+        self.sub_enc = self.create_subscription(Int32MultiArray, 'encoder_data', self.enc_cb, 10)
+        self.pub_cmd = self.create_publisher(Int32MultiArray, 'motor_cmd', 10)
+
+        self.get_logger().info(
+            f"PD4 ready | targets={self.targets} | kp={self.kp_list} | kd={self.kd_list} | "
+            f"dead={self.dead} | min_run={self.min_run}"
+        )
+
+    # ---- yardımcılar ----
+    def _pad_or_trim(self, vals: List[Number], n: int, default_scalar: Number) -> List[Number]:
+        if len(vals) < n:
+            vals = vals + [vals[-1] if vals else default_scalar] * (n - len(vals))
+        elif len(vals) > n:
+            vals = vals[:n]
+        return vals
+
+    def _as_float_list(self, v: Union[List[Number], Number], n: int, default_scalar: float) -> List[float]:
+        if isinstance(v, (list, tuple)):
+            vals = [float(x) for x in v]
+        elif isinstance(v, (int, float)):
+            vals = [float(v)] * n
+        else:
+            vals = [default_scalar] * n
+        return [float(x) for x in self._pad_or_trim(vals, n, default_scalar)]
+
+    def _as_int_list(self, v: Union[List[Number], Number], n: int, default_scalar: int) -> List[int]:
+        if isinstance(v, (list, tuple)):
+            vals = [int(x) for x in v]
+        elif isinstance(v, (int, float)):
+            vals = [int(v)] * n
+        else:
+            vals = [default_scalar] * n
+        return [int(x) for x in self._pad_or_trim(vals, n, default_scalar)]
+
+    def _sat(self, u: float, lo=-100.0, hi=100.0) -> float:
+        return hi if u > hi else lo if u < lo else u
+
+    def _shape(self, u: float) -> int:
+        """Ölü bölge + minimum çalışma + saturasyon (duty, yüzde)."""
+        s = 1 if u >= 0 else -1
+        a = abs(u)
+        if a < self.dead:
+            return 0
+        if a < self.min_run:
+            return int(s * self.min_run)
+        return int(self._sat(u, -100.0, 100.0))
+
+    # ---- callback ----
+    def enc_cb(self, msg: Int32MultiArray):
+        data = list(msg.data)
+        if len(data) < 4:
+            data += [data[-1] if data else 0] * (4 - len(data))
+        pos = data[:4]
+
+        cmds: List[int] = []
+        for i in range(4):
+            err = int(self.targets[i]) - int(pos[i])
+            # dt bilinmediği için D terimi örnek başına fark şeklinde
+            u = self.kp_list[i] * err + self.kd_list[i] * (err - self.prev_err[i])
+            self.prev_err[i] = err
+            cmds.append(self._shape(u))
+
+        # Gerekirse bu logu azalt
+        self.get_logger().info(f"u={cmds}  err={[int(self.targets[i])-int(pos[i]) for i in range(4)]} ")
+
+        out = Int32MultiArray()
+        out.data = cmds  # [u1,u2,u3,u4]
+        self.pub_cmd.publish(out)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PDController()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
