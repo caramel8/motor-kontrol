@@ -1,26 +1,34 @@
-# === main.py (USB-CDC + Encoder + L298N IN1..IN4, flush'lı) ===
+# === main.py (USB-CDC + 4x Encoder + 4x DC motor, 2-PWM/motor, flush'lı) ===
 from machine import Pin, PWM
 import micropython, time, sys, uselect
 
 micropython.alloc_emergency_exception_buf(128)
 
-# ----------------- ENCODER PINS & POWER -----------------
-enc2_b = Pin(11, Pin.IN, Pin.PULL_UP)
-enc2_a = Pin(10, Pin.IN, Pin.PULL_UP)
-enc1_b = Pin(13, Pin.IN, Pin.PULL_UP)
-enc1_a = Pin(12, Pin.IN, Pin.PULL_UP)
+# ----------------- ENCODER PINS (A,B) -----------------
+# M1: A->GP1,  B->GP0
+enc1_a = Pin(1,  Pin.IN)
+enc1_b = Pin(0,  Pin.IN)
 
-# Harici 4.7k–10k pull-up önerilir (open-collector için şart)
-encoder_vcc = Pin(14, Pin.OUT)
-encoder_vcc.high()
+# M2: A->GP14, B->GP15
+enc2_a = Pin(14, Pin.IN)
+enc2_b = Pin(15, Pin.IN)
+
+# M3: A->GP26, B->GP27
+enc3_a = Pin(26, Pin.IN)
+enc3_b = Pin(27, Pin.IN)
+
+# M4: A->GP17, B->GP16
+enc4_a = Pin(17, Pin.IN)
+enc4_b = Pin(16, Pin.IN)
 
 # ----------------- ENCODER STATE -----------------
-pos1 = 0
-pos2 = 0
+pos1 = 0; pos2 = 0; pos3 = 0; pos4 = 0
 prev1 = (enc1_a.value() << 1) | enc1_b.value()
 prev2 = (enc2_a.value() << 1) | enc2_b.value()
+prev3 = (enc3_a.value() << 1) | enc3_b.value()
+prev4 = (enc4_a.value() << 1) | enc4_b.value()
 
-# Quadrature komşu-geçiş tablosu
+# Komşu-geçiş tablosu (quadrature 4x)
 trans = {
     0b00: {0b01:+1, 0b10:-1},
     0b01: {0b11:+1, 0b00:-1},
@@ -28,37 +36,47 @@ trans = {
     0b10: {0b00:+1, 0b11:-1},
 }
 
-def enc1_isr(pin):
-    global pos1, prev1
-    curr = (enc1_a.value() << 1) | enc1_b.value()
-    pos1 += trans.get(prev1, {}).get(curr, 0)
-    prev1 = curr
+def enc_isr_generic(enc_a, enc_b, prev_name, pos_name):
+    globals_dict = globals()
+    curr = (enc_a.value() << 1) | enc_b.value()
+    prev = globals_dict[prev_name]
+    delta = trans.get(prev, {}).get(curr, 0)
+    if delta:
+        globals_dict[pos_name] += delta
+    globals_dict[prev_name] = curr
 
-def enc2_isr(pin):
-    global pos2, prev2
-    curr = (enc2_a.value() << 1) | enc2_b.value()
-    pos2 += trans.get(prev2, {}).get(curr, 0)
-    prev2 = curr
+def enc1_isr(pin): enc_isr_generic(enc1_a, enc1_b, 'prev1', 'pos1')
+def enc2_isr(pin): enc_isr_generic(enc2_a, enc2_b, 'prev2', 'pos2')
+def enc3_isr(pin): enc_isr_generic(enc3_a, enc3_b, 'prev3', 'pos3')
+def enc4_isr(pin): enc_isr_generic(enc4_a, enc4_b, 'prev4', 'pos4')
 
-# 4x sayım: A ve B hem rising hem falling
-enc1_a.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc1_isr)
-enc1_b.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc1_isr)
-enc2_a.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
-enc2_b.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
+# 4x sayım için A ve B hem rising hem falling
+for p in (enc1_a, enc1_b): p.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc1_isr)
+for p in (enc2_a, enc2_b): p.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc2_isr)
+for p in (enc3_a, enc3_b): p.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc3_isr)
+for p in (enc4_a, enc4_b): p.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=enc4_isr)
 
-# ----------------- L298N DIRECTION PINS -----------------
-# IN1, IN2, IN3, IN4 -> GP8, GP7, GP6, GP5
-IN1 = Pin(7, Pin.OUT);  IN1.low()
-IN2 = Pin(8, Pin.OUT);  IN2.low()
-IN3 = Pin(5, Pin.OUT);  IN3.low()
-IN4 = Pin(6, Pin.OUT);  IN4.low()
+# ----------------- MOTOR PWM PINS (A,B) -----------------
+# M1 PWM: GP4, GP5
+m1_pwm_a = PWM(Pin(4))
+m1_pwm_b = PWM(Pin(5))
 
-# ----------------- PWM OUTPUTS (ENA/ENB) -----------------
-# ENA -> GP9, ENB -> GP4 (PWM)
-motor1_pwm = PWM(Pin(9))   # Motor1 hız (ENA)
-motor2_pwm = PWM(Pin(4))   # Motor2 hız (ENB)
-motor1_pwm.freq(1000)
-motor2_pwm.freq(1000)
+# M2 PWM: GP12, GP13
+m2_pwm_a = PWM(Pin(12))
+m2_pwm_b = PWM(Pin(13))
+
+# M3 PWM: GP22, GP21
+m3_pwm_a = PWM(Pin(22))
+m3_pwm_b = PWM(Pin(21))
+
+# M4 PWM: GP19, GP18
+m4_pwm_a = PWM(Pin(19))
+m4_pwm_b = PWM(Pin(18))
+
+ALL_PWMS = (m1_pwm_a, m1_pwm_b, m2_pwm_a, m2_pwm_b, m3_pwm_a, m3_pwm_b, m4_pwm_a, m4_pwm_b)
+for p in ALL_PWMS:
+    p.freq(1000)
+    p.duty_u16(0)
 
 def duty_from_percent(p):
     # p: 0..100
@@ -66,31 +84,34 @@ def duty_from_percent(p):
     if p > 100: p = 100
     return int(p * 65535 / 100)
 
-def set_motor(motor_idx, percent):
-    """percent: -100..100 ; yön IN pinleriyle, hız PWM ile"""
+def set_motor_pair(pwm_a: PWM, pwm_b: PWM, percent: int):
+    """
+    İki PWM ile sürüş:
+      percent > 0  => A = duty, B = 0  (ileri)
+      percent < 0  => A = 0,    B = duty (geri)
+      percent == 0 => her ikisi 0 (coast)
+    """
     if percent > 100:  percent = 100
     if percent < -100: percent = -100
-    speed = duty_from_percent(abs(percent))
+    if percent > 0:
+        pwm_a.duty_u16(duty_from_percent(percent))
+        pwm_b.duty_u16(0)
+    elif percent < 0:
+        pwm_a.duty_u16(0)
+        pwm_b.duty_u16(duty_from_percent(-percent))
+    else:
+        pwm_a.duty_u16(0)
+        pwm_b.duty_u16(0)
 
+def set_motor(motor_idx: int, percent: int):
     if motor_idx == 1:
-        # Yön
-        if percent > 0:
-            IN1.high(); IN2.low()     # ileri
-        elif percent < 0:
-            IN1.low();  IN2.high()    # geri
-        else:
-            IN1.low();  IN2.low()     # coast
-        # Hız
-        motor1_pwm.duty_u16(speed if percent != 0 else 0)
-
+        set_motor_pair(m1_pwm_a, m1_pwm_b, percent)
     elif motor_idx == 2:
-        if percent > 0:
-            IN3.high(); IN4.low()
-        elif percent < 0:
-            IN3.low();  IN4.high()
-        else:
-            IN3.low();  IN4.low()
-        motor2_pwm.duty_u16(speed if percent != 0 else 0)
+        set_motor_pair(m2_pwm_a, m2_pwm_b, percent)
+    elif motor_idx == 3:
+        set_motor_pair(m3_pwm_a, m3_pwm_b, percent)
+    elif motor_idx == 4:
+        set_motor_pair(m4_pwm_a, m4_pwm_b, percent)
 
 # ----------------- USB-CDC I/O -----------------
 poll = uselect.poll()
@@ -99,27 +120,28 @@ poll.register(sys.stdin, uselect.POLLIN)
 last = time.ticks_ms()
 
 while True:
-    # --- USB-CDC'den komut oku: "m1,m2" ---
+    # --- USB-CDC'den komut oku: "m1,m2,m3,m4" ---
     if poll.poll(0):  # non-blocking
         line = sys.stdin.readline()
         if line:
             try:
-                line = line.strip()  # \r\n temizler
-                if (',' in line) and line:
-                    m1s, m2s = line.split(',', 1)
-                    c1 = int(m1s); c2 = int(m2s)
+                line = line.strip()
+                if line and (line.count(',') >= 3):
+                    s1, s2, s3, s4 = line.split(',', 3)
+                    c1 = int(s1); c2 = int(s2); c3 = int(s3); c4 = int(s4)
                     set_motor(1, c1)
                     set_motor(2, c2)
+                    set_motor(3, c3)
+                    set_motor(4, c4)
             except Exception:
                 # format hatalarını sessizce yut
                 pass
 
-    # --- 100 Hz encoder raporu (USB-CDC): sadece "pos1,pos2" ---
+    # --- 100 Hz encoder raporu: "pos1,pos2,pos3,pos4" ---
     now = time.ticks_ms()
     if time.ticks_diff(now, last) >= 10:
         try:
-            # flush'lı yazım
-            sys.stdout.write(f"{pos1},{pos2}\r\n")
+            sys.stdout.write(f"{pos1},{pos2},{pos3},{pos4}\r\n")
             if hasattr(sys.stdout, "flush"):
                 sys.stdout.flush()
         except Exception:
