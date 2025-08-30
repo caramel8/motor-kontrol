@@ -17,8 +17,6 @@ encoder_vcc.high()
 # ----------------- ACS712 CURRENT SENSOR (Safe Pico W pins) -----------------
 # Use GP26 (ADC0) - safe for Pico W
 CURRENT_ADC_PIN = 26
-CURRENT_SENSOR_VCC = Pin(21, Pin.OUT)  # GP21 for sensor power (Pin 27)
-CURRENT_SENSOR_VCC.high()  # Power the current sensor
 
 # Current sensor calibration
 SENS_MV_PER_A = 100.0  # ACS712-30A: 100mV/A, ACS712-20A: 66mV/A, ACS712-5A: 185mV/A
